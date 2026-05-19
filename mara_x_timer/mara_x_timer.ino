@@ -1,117 +1,189 @@
-/**************************************************************************
- This is an example for our Monochrome OLEDs based on SSD1306 drivers
-
- Pick one up today in the adafruit shop!
- ------> http://www.adafruit.com/category/63_98
-
- This example is for a 128x32 pixel display using I2C to communicate
- 3 pins are required to interface (two I2C and one reset).
-
- Adafruit invests time and resources providing this open
- source code, please support Adafruit and open-source
- hardware by purchasing products from Adafruit!
-
- Written by Limor Fried/Ladyada for Adafruit Industries,
- with contributions from the open source community.
- BSD license, check license.txt for more information
- All text above, and the splash screen below must be
- included in any redistribution.
- **************************************************************************/
-
-#include <SPI.h>
+//Includes
 #include <Wire.h>
-#include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <SoftwareSerial.h>
 
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+//Defines
+#define SCREEN_WIDTH    128 // Width in px 
+#define SCREEN_HEIGHT   32 // Height in px
+#define OLED_RESET      -1
+#define SCREEN_ADDRESS  0x3C // or 0x3D Check datasheet or Oled Display
+#define BUFFER_SIZE     82 // Median buffer size
 
-// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
-// The pins for I2C are defined by the Wire-library. 
-// On an arduino UNO:       A4(SDA), A5(SCL)
-// On an arduino MEGA 2560: 20(SDA), 21(SCL)
-// On an arduino LEONARDO:   2(SDA),  3(SCL), ...
-#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
-#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+//Pins
+int RX = 5; // PIN 4 Mara TX to Arduino RX D5
+int TX = 6; // PIN 3 Mara RX to Arduino TX D6
+
+//Internals
+long lastMillis = 0;
+int seconds = 0;
+int lastTimer = 0;
+long serialTimeout = 0;
+char buffer[BUFFER_SIZE];
+int index = 0;
+
+//Mara Data
+String maraData[7];
+int currentBoilerTemperature = 0;
+int currentSteamTemperature = 0;
+int targetSteamTemperature = 0;
+int pumpState = 0;
+char mode = "";
+String version;
+
+//Instances
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+SoftwareSerial MaraXSerial(RX, TX);
 
-#define NUMFLAKES     10 // Number of snowflakes in the animation example
-
-#define LOGO_HEIGHT   16
-#define LOGO_WIDTH    16
-static const unsigned char PROGMEM logo_bmp[] =
-{ 0b00000000, 0b11000000,
-  0b00000001, 0b11000000,
-  0b00000001, 0b11000000,
-  0b00000011, 0b11100000,
-  0b11110011, 0b11100000,
-  0b11111110, 0b11111000,
-  0b01111110, 0b11111111,
-  0b00110011, 0b10011111,
-  0b00011111, 0b11111100,
-  0b00001101, 0b01110000,
-  0b00011011, 0b10100000,
-  0b00111111, 0b11100000,
-  0b00111111, 0b11110000,
-  0b01111100, 0b11110000,
-  0b01110000, 0b01110000,
-  0b00000000, 0b00110000 };
-
-void setup() {
+void setup()
+{
+  display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS);
+  display.clearDisplay();
+  display.display();
   Serial.begin(9600);
-
-  // Wait for display
+  MaraXSerial.begin(9600);
+  memset(buffer, 0, BUFFER_SIZE);
   delay(500);
+  infoScreen();
+}
 
-  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println(F("SSD1306 allocation failed"));
-    for(;;); // Don't proceed, loop forever
+void infoScreen() 
+{
+  readState();
+
+  display.clearDisplay();
+
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+
+  display.setCursor(0,0);
+  if (mode == 43) { // "+"
+    display.print(F("COFFEE MODE"));
+  } else if (mode == 67) { // "C"
+    display.print(F("STEAM MODE"));
+  } else {
+    display.print(F("NO MODE"));
   }
 
-  display.setRotation(0);
-  
-  display.clearDisplay();
+  display.setCursor(100,0);
+  display.print(version);
 
-  testdrawstyles();    // Draw 'stylized' characters
-
-}
-
-void loop() {
-}
-
-
-void testdrawstyles(void) {
-  display.clearDisplay();
-
-  display.setTextSize(2);             // Normal 1:1 pixel scale
-  display.setTextColor(SSD1306_WHITE);        // Draw white text
-  display.setCursor(0,0);             // Start at top-left corner
-  display.println(F("99"));
-
-  display.setTextSize(2);             // Draw 2X-scale text
-  display.setTextColor(SSD1306_WHITE);
   display.setCursor(0,16);
-  display.println(F("120"));
+  display.print(targetSteamTemperature);
+  display.print(F(" STEAM TARGET TEMP"));
+
+  display.display();
+
+  delay(5000);
+}
+
+void readState()
+{
+  /*
+    Example Data: C1.06,116,124,093,0840,1,0\n every ~400-500ms
+    Length: 26
+    [Pos] [Data] [Describtion]
+    0)      C     Coffee Mode (C) or SteamMode (V)
+    -        1.06  Software Version
+    1)      116   current steam temperature (Celsisus)
+    2)      124   target steam temperature (Celsisus)
+    3)      093   current hx temperature (Celsisus)
+    4)      0840  countdown for 'boost-mode'
+    5)      1     heating element on or off
+    6)      0     pump on or off
+  */
+
+  while (MaraXSerial.available())
+  {
+    serialTimeout = millis();
+    char rcv = MaraXSerial.read();
+    if (rcv != '\n')
+      buffer[index++] = rcv;
+    else {
+      index = 0;
+      Serial.println(buffer);
+      char* ptr = strtok(buffer, ",");
+      int idx = 0;
+      while (ptr != NULL)
+      {
+        maraData[idx++] = String(ptr);
+        ptr = strtok(NULL, ",");
+      }
+    }
+  }
+  if (millis() - serialTimeout > 6000)
+  {
+    serialTimeout = millis();
+  }
+
+  // Store values
+  mode = maraData[0].charAt(0); // only first character
+  version = maraData[0].substring(1); // start from second character
+  currentSteamTemperature = maraData[1].toInt();
+  targetSteamTemperature = maraData[2].toInt();
+  currentBoilerTemperature = maraData[3].toInt();
+  pumpState = maraData[6].toInt();
+}
+
+void updateView()
+{
+
+  display.clearDisplay();
+
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE); // Draw white text
+  display.setCursor(String(currentBoilerTemperature).length() == 3 ? 0 : 12,0);
+  display.println(currentBoilerTemperature);
+
+  display.setTextSize(2); // Draw 2X-scale text
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(String(currentSteamTemperature).length() == 3 ? 0 : 12,16);
+  display.println(currentSteamTemperature); 
 
   // display.setTextColor(SSD1306_BLACK,SSD1306_WHITE);
   display.setTextSize(3);
-  display.setCursor(86,0);             // Start at top-left corner
-  display.println(F("0"));
+  display.setCursor(86,0);
+  display.println(seconds);
   // display.setTextColor(SSD1306_BLACK,SSD1306_WHITE);
   display.setTextSize(1);
-  display.setCursor(86,24);             // Start at top-left corner
-  // display.println(F("LAST36"));
-  // display.println(F("SECNDS"));
-  display.println(F("36 SEC"));
+  display.setCursor(86,24);
+  display.println(String(lastTimer) + " SEC");
 
 
   display.setTextSize(1);
-  display.setCursor(38,16);
-  display.println(F("STEAM"));
 
   display.setCursor(38,0);
   display.println(F("BOILR"));
 
+  display.setCursor(38,16);
+  display.println(F("STEAM"));
+
   display.display();
+}
+
+void loop()
+{
+  readState();
+
+  if (pumpState) {
+    lastMillis = millis();
+
+    while (pumpState) {
+      if (millis() - lastMillis >= 1000) {
+        lastMillis = millis();
+        ++seconds;
+        if (seconds > 99)
+          seconds = 0;
+      }
+
+      updateView();
+
+      readState();
+    }
+
+    lastTimer = seconds;
+    seconds = 0;
+  }
+  
+  updateView();
 }

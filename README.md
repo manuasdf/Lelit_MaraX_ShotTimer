@@ -19,6 +19,21 @@ The project uses, only when necessary, currently maintained dependencies.
 
 Reasoning: For the longest time, most of the listed projects were using a deprecated library. The aim is to handcode as much as possible to make the project run on smaller hardware as well. Without any dependencies will most likely not be possible since libraries for the display and the software serial are needed. 
 
+## Pseudocode
+
+```
+  // read state
+  // if state is pump==true
+    // save time-stamp
+    // while pump==true
+      // read time stamp
+      // refresh display
+      // read state
+    // update last time
+  // read state
+  // update display
+```
+
 ## Compatibility
 
 Adafruit SSD1306 for the display: https://github.com/adafruit/Adafruit_SSD1306  
