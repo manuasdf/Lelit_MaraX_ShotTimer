@@ -19,6 +19,7 @@ int TX = 6; // PIN 3 Mara RX to Arduino TX D6
 unsigned long lastTimerMillis = 0;
 unsigned int seconds = 0;
 unsigned int lastTimer = 0;
+unsigned int shotsProduced = 0;
 unsigned long serialTimeout = 0;
 unsigned long infoScreenTimeout = 0;
 char buffer[BUFFER_SIZE];
@@ -252,7 +253,7 @@ void updateView()
   display.clearDisplay();
 
   if (stateValid) {
-    displayTemplate_03();
+    displayTemplate_04();
   } else {
     displayErrorScreen();
   }
@@ -434,6 +435,27 @@ void displayTemplate_03() {
   }
 }
 
+void displayTemplate_04() {
+  display.setCursor(0, 0);
+  display.setTextSize(2); // Draw 2X-scale text
+  display.setTextColor(SSD1306_WHITE); // Draw white text
+  display.setCursor(String(seconds).length() == 2 ? 12 : 24, 0);
+  display.print(seconds);
+  display.print("/");
+  display.print(lastTimer); 
+
+  display.setCursor(String(currentSteamTemperature).length() == 3 ? 0 : 12, 16);
+  display.print(currentSteamTemperature); 
+  display.print("/");
+  display.print(targetSteamTemperature); 
+
+  display.setCursor(100,0);
+  display.println(shotsProduced);
+
+  display.setCursor(currentBoilerTemperature >= 100 ? 90 : 100, 16);
+  display.println(currentBoilerTemperature);
+}
+
 void loop()
 {
   readState();
@@ -452,6 +474,7 @@ void loop()
     }
   } else {
     if (seconds > 9) {
+      shotsProduced++;
       lastTimer = seconds;
     }
 
